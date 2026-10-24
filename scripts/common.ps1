@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$script:UnlockerVersion = '1.0.2'
+$script:UnlockerVersion = '1.1.0'
 $script:RuleGroup       = 'RobloxUnlocker'
 $script:TaskName        = 'RobloxUnlocker-Refresh'
 $script:HostsPath       = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
@@ -428,13 +428,17 @@ function Get-RobloxLogStats {
         }
     }
 
+    $arwLines = @($lines | Where-Object { $_ -match 'AssetResolutionWorkflow' })
+    $moderated = @($arwLines | Where-Object { $_ -match 'wasModerated: true|Asset has not been reviewed|AssetDelivery403' }).Count
+
     return [pscustomobject]@{
         Path      = $Path
         Total     = $http.Count
         Ok        = $ok
         Errors    = $http.Count - $ok
         Stalled   = $stalled
-        Assets    = @($lines | Where-Object { $_ -match 'AssetResolutionWorkflow' }).Count
+        Assets    = $arwLines.Count - $moderated
+        Moderated = $moderated
         Quic      = @($lines | Where-Object { $_ -match 'ngtcp2|ERR_IDLE_CLOSE' }).Count
         Hosts     = $hosts
         WrittenAt = (Get-Item $Path).LastWriteTime

@@ -45,9 +45,20 @@ function Get-LogReport {
         }
     }
 
-    $assets = @($lines | Where-Object { $_ -match 'AssetResolutionWorkflow' }).Count
+    $arwLines = @($lines | Where-Object { $_ -match 'AssetResolutionWorkflow' })
+    $assetsModerated = @($arwLines | Where-Object { $_ -match 'wasModerated: true|Asset has not been reviewed|AssetDelivery403' }).Count
+    $assets = $arwLines.Count - $assetsModerated
     $quic   = @($lines | Where-Object { $_ -match 'ngtcp2|ERR_IDLE_CLOSE' }).Count
     $joined = @($lines | Where-Object { $_ -match 'Joining game|Replicator created' }).Count
+
+    $teleports = @($lines | Where-Object { $_ -match 'SessionTransitionFSM\] Teleported' }).Count
+    $ackTimeouts = @($lines | Where-Object { $_ -match 'AckTimeout 1' }).Count
+    $udmux = @($lines | Where-Object { $_ -match 'UDMUX Address = ' }).Count
+    $direct = @($lines | Where-Object { $_ -match '\[FLog::Network\] Server Address = ' }).Count
+    $lostServers = @($lines |
+        Select-String -Pattern 'Lost connection to ([0-9.]+)\|(\d+)' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Select-Object -Unique)
 
     Write-Note ('Файл: {0}' -f (Split-Path $path -Leaf))
     Write-Note ('Записан: {0}' -f (Get-Item $path).LastWriteTime)
@@ -56,8 +67,19 @@ function Get-LogReport {
     Write-Host ('  Успешных ........... {0}' -f $ok)
     Write-Host ('  Зависаний (>=50 с) . {0}' -f $stallTotal)
     Write-Host ('  Ошибок ассетов ..... {0}' -f $assets)
+    Write-Host ('  Модерир. ассетов ... {0}' -f $assetsModerated)
     Write-Host ('  Ошибок QUIC ........ {0}' -f $quic)
     Write-Host ('  Вход в игру ........ {0}' -f $(if ($joined -gt 0) { 'да' } else { 'нет' }))
+    Write-Host ('  Телепортов ......... {0}' -f $teleports)
+    Write-Host ('  Потерь соединения .. {0}' -f $ackTimeouts)
+    Write-Host ('  Входов: UDMUX/напр.  {0}/{1}' -f $udmux, $direct)
+
+    if ($lostServers.Count -gt 0) {
+        Write-Host ''
+        foreach ($serverIp in ($lostServers | Select-Object -First 5)) {
+            Write-Note ('потеряно соединение с {0}' -f $serverIp)
+        }
+    }
 
     if ($stalls.Count -gt 0) {
         Write-Host ''
@@ -78,12 +100,16 @@ function Get-LogReport {
     }
 
     return [pscustomobject]@{
-        Path     = $path
-        Total    = $http.Count
-        Ok       = $ok
-        Stalled  = $stallTotal
-        Assets   = $assets
-        Joined   = ($joined -gt 0)
+        Path        = $path
+        Total       = $http.Count
+        Ok          = $ok
+        Stalled     = $stallTotal
+        Assets      = $assets
+        Moderated   = $assetsModerated
+        Joined      = ($joined -gt 0)
+        Teleports   = $teleports
+        AckTimeouts = $ackTimeouts
+        LostServers = $lostServers
     }
 }
 
@@ -307,6 +333,18 @@ elseif (-not $fixInstalled -and $signs.Count -gt 0) {
     Write-Host ''
     Write-Host '  ВЕРДИКТ: ФИКС НУЖЕН' -ForegroundColor Yellow
     Write-Action 'Запусти service.bat -> 1 (установка)'
+}
+elseif ($log.AckTimeouts -gt 0) {
+    Write-Bad ('В последней сессии потеряно соединений с игровыми серверами: {0}' -f $log.AckTimeouts)
+    foreach ($serverIp in ($log.LostServers | Select-Object -First 5)) {
+        Write-Note ('- {0}' -f $serverIp)
+    }
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: ПРОБЛЕМА С ИГРОВЫМ СЕРВЕРОМ' -ForegroundColor Yellow
+    Write-Note 'Это не ассеты: фикс не трогает UDP игровых серверов (там порты 50000-65535).'
+    Write-Note 'Провайдер режет UDP до игровых серверов Roblox. Варианты:'
+    Write-Note '  - VPN на время игры (работает всегда, но пинг выше);'
+    Write-Note '  - UDP-desync в zapret для диапазонов игровых серверов (docs/PROBLEMS.md, P5).'
 }
 elseif (-not $fixInstalled -and $signs.Count -eq 0) {
     Write-Good 'Признаков поломки не найдено.'
