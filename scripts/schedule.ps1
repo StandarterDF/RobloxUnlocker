@@ -80,7 +80,13 @@ function Invoke-Status {
     $task = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
 
     if (-not $task) {
-        Write-Note 'Автоподдержка не установлена'
+        $state = Get-State
+        if ($state -and $state.scheduled) {
+            Write-Good 'Автоподдержка установлена (детали видны только из консоли администратора)'
+        }
+        else {
+            Write-Note 'Автоподдержка не установлена'
+        }
         return $true
     }
 

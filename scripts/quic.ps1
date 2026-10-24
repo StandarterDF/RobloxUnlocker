@@ -131,7 +131,13 @@ function Invoke-Status {
     $exes = @(Get-RobloxExes)
 
     if (-not (Test-Admin)) {
-        Write-Note 'Для проверки правил файрвола нужны права администратора (service.bat -> 2 из консоли администратора)'
+        $state = Get-State
+        if ($state -and $state.quic) {
+            Write-Good 'QUIC-фикс установлен (детали видны только из консоли администратора)'
+        }
+        else {
+            Write-Bad 'QUIC-фикс не установлен'
+        }
         if ($exes.Count -gt 0) { Write-Note ('Найдено версий Roblox: {0}' -f $exes.Count) }
         return $true
     }
