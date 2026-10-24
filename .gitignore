@@ -1,0 +1,19 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Временные файлы и состояние RobloxUnlocker
+tmp/
+*.log
+state.json
+hosts.backup.*
+capture.etl
+capture.txt
+
+# ОС
+Thumbs.db
+desktop.ini
+.DS_Store
