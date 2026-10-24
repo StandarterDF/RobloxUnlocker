@@ -1,9 +1,10 @@
 ﻿# ============================================================================
 #  RobloxUnlocker - диагностика
 #
-#  Показывает: состояние установки, статистику последней сессии Roblox,
-#  доступность CDN-адресов и (по ключу -Capture) реальный захват QUIC-трафика
-#  через pktmon, чтобы доказать односторонний поток UDP 443.
+#  Отвечает на один вопрос: нужен ли этому компьютеру фикс.
+#  Показывает статистику последней сессии Roblox, доступность CDN-адресов и
+#  (по ключу -Capture) реальный захват QUIC-трафика через pktmon.
+#  В конце печатает строку "ВЕРДИКТ: ..." — по ней можно принять решение.
 # ============================================================================
 
 param(
@@ -21,7 +22,7 @@ function Get-LogReport {
     $path = Get-RobloxLogPath
     if (-not $path) {
         Write-Bad 'Логи Roblox не найдены — ни разу не запускался?'
-        return
+        return $null
     }
 
     $lines = Get-Content -Path $path -Encoding UTF8
@@ -75,6 +76,15 @@ function Get-LogReport {
     else {
         Write-Good 'В последней сессии зависаний на ассетах нет'
     }
+
+    return [pscustomobject]@{
+        Path     = $path
+        Total    = $http.Count
+        Ok       = $ok
+        Stalled  = $stallTotal
+        Assets   = $assets
+        Joined   = ($joined -gt 0)
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -82,6 +92,9 @@ function Get-LogReport {
 # ---------------------------------------------------------------------------
 
 function Get-CdnReport {
+    $checkedTotal = 0
+    $deadTotal = 0
+
     foreach ($domain in $script:Domains) {
         $systemIps = @()
         try {
@@ -107,12 +120,20 @@ function Get-CdnReport {
             continue
         }
 
+        $checkedTotal += $checked
+        $deadTotal += $dead.Count
+
         if ($dead.Count -eq 0) {
             Write-Good ('{0}: все {1} проверенных адресов отвечают' -f $domain, $checked)
         }
         else {
             Write-Bad ('{0}: мертвы {1} из {2} ({3})' -f $domain, $dead.Count, $checked, ($dead -join ', '))
         }
+    }
+
+    return [pscustomobject]@{
+        Checked = $checkedTotal
+        Dead    = $deadTotal
     }
 }
 
@@ -123,12 +144,12 @@ function Get-CdnReport {
 function Get-CaptureReport {
     if (-not (Test-Admin)) {
         Write-Bad 'Для захвата трафика нужны права администратора. Запусти: service.bat -> 4'
-        return
+        return $null
     }
 
     if (-not (Get-Command pktmon -ErrorAction SilentlyContinue)) {
         Write-Bad 'pktmon не найден (нужна Windows 10 1809+ / Windows 11)'
-        return
+        return $null
     }
 
     Ensure-DataDir
@@ -150,7 +171,7 @@ function Get-CaptureReport {
 
     if (-not (Test-Path $txt)) {
         Write-Bad 'Не удалось разобрать захват'
-        return
+        return $null
     }
 
     $rx = [regex]'(\d+\.\d+\.\d+\.\d+)\.(\d+) > (\d+\.\d+\.\d+\.\d+)\.(\d+)'
@@ -193,7 +214,7 @@ function Get-CaptureReport {
 
     if ($flows.Count -eq 0) {
         Write-Good 'UDP 443 наружу не ходил вообще — QUIC у Roblox не используется (это норма при включённом фиксе)'
-        return
+        return [pscustomobject]@{ Broken = @(); Ran = $true; Flows = 0 }
     }
 
     $broken = @()
@@ -212,11 +233,12 @@ function Get-CaptureReport {
     if ($broken.Count -gt 0) {
         Write-Bad ('Односторонний QUIC (в одну сторону, ответа ноль): {0}' -f ($broken -join ', '))
         Write-Bad 'Это и есть причина «серых» моделей: провайдер режет UDP 443.'
-        Write-Action 'Запусти установку (service.bat -> 1) — она заблокирует QUIC для Roblox и вернёт загрузку по TCP.'
     }
     else {
         Write-Good 'Односторонних QUIC-потоков не найдено'
     }
+
+    return [pscustomobject]@{ Broken = $broken; Ran = $true; Flows = $flows.Count }
 }
 
 # ---------------------------------------------------------------------------
@@ -224,41 +246,92 @@ function Get-CaptureReport {
 # ---------------------------------------------------------------------------
 
 Write-Head ('RobloxUnlocker {0} - диагностика' -f $script:UnlockerVersion)
-Write-Note ('Права администратора: {0}' -f $(if (Test-Admin) { 'есть' } else { 'нет (часть проверок недоступна)' }))
+Write-Note ('Права администратора: {0}' -f $(if (Test-Admin) { 'есть' } else { 'нет (захват трафика недоступен)' }))
 
 Write-Head 'Установка'
 $null = & (Join-Path $PSScriptRoot 'quic.ps1') -Mode status -Quiet
 $null = & (Join-Path $PSScriptRoot 'hosts.ps1') -Mode status -Quiet
 
 Write-Head 'Последняя сессия Roblox'
-Get-LogReport
+$log = Get-LogReport
 
 Write-Head 'Доступность CDN-адресов'
-Get-CdnReport
+$cdn = Get-CdnReport
 
+$capture = $null
 if ($Capture) {
     Write-Head 'Захват QUIC-трафика'
-    Get-CaptureReport
+    $capture = Get-CaptureReport
 }
 else {
-    Write-Note 'Хочешь поймать проблему на пакетах: service.bat -> 4 (захват 90 секунд)'
+    Write-Note 'Проверить трафик на пакетах: service.bat -> 4'
 }
 
-Write-Head 'Что делать'
+# ---------------------------------------------------------------------------
+#  Вердикт
+# ---------------------------------------------------------------------------
+
+Write-Head 'Вердикт'
+
 $state = Get-State
-$logPath = Get-RobloxLogPath
-$stallTotal = 0
+$fixInstalled = [bool]($state -and $state.quic)
 
-if ($logPath) {
-    $stallTotal = @(Get-Content $logPath -Encoding UTF8 | Where-Object { $_ -match 'net:(5\d{4}|6\d{4})\.' }).Count
+$signs = @()
+$advice = @()
+
+if ($log) {
+    if ($log.Stalled -ge 5) {
+        $signs += ('зависаний >= 50 с при загрузке ассетов: {0}' -f $log.Stalled)
+    }
+    if ($log.Assets -ge 5) {
+        $signs += ('ошибок ассетов: {0}' -f $log.Assets)
+    }
 }
 
-if (-not $state -or -not $state.quic) {
-    Write-Action 'QUIC-фикс не установлен -> service.bat -> 1'
+if ($cdn -and $cdn.Dead -gt 0) {
+    $signs += ('недоступных CDN-адресов: {0} из {1}' -f $cdn.Dead, $cdn.Checked)
 }
-elseif ($stallTotal -ge 5) {
-    Write-Action 'Фикс стоит, но зависания есть -> обнови правила: service.bat -> 1'
+
+if ($capture -and $capture.Broken.Count -gt 0) {
+    $signs += ('QUIC-потоков без ответа: {0}' -f $capture.Broken.Count)
+}
+
+if (-not $log -or $log.Total -eq 0) {
+    Write-Note 'Нет данных: запусти Roblox на 2-3 минуты, зайди в игру и повтори диагностику.'
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: НЕДОСТАТОЧНО ДАННЫХ' -ForegroundColor Yellow
+}
+elseif (-not $fixInstalled -and $signs.Count -gt 0) {
+    Write-Bad 'Найдены признаки поломки:'
+    foreach ($sign in $signs) { Write-Note ('- {0}' -f $sign) }
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: ФИКС НУЖЕН' -ForegroundColor Yellow
+    Write-Action 'Запусти service.bat -> 1 (установка)'
+}
+elseif (-not $fixInstalled -and $signs.Count -eq 0) {
+    Write-Good 'Признаков поломки не найдено.'
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: ФИКС НЕ НУЖЕН' -ForegroundColor Green
+    Write-Note 'Если ассеты всё равно серые — запусти Roblox, зайди в проблемную игру и повтори: service.bat -> 4 (захват трафика).'
+}
+elseif ($fixInstalled -and $signs.Count -eq 0) {
+    Write-Good 'Фикс установлен, последняя сессия прошла без зависаний.'
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: УЖЕ РАБОТАЕТ' -ForegroundColor Green
+}
+elseif ($fixInstalled -and ($cdn -and $cdn.Dead -gt 0) -and -not ($log.Stalled -ge 5)) {
+    Write-Bad 'QUIC уже отключён, но часть CDN-адресов недоступна:'
+    foreach ($sign in $signs) { Write-Note ('- {0}' -f $sign) }
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: НУЖНО ОБНОВИТЬ HOSTS' -ForegroundColor Yellow
+    Write-Action 'Запусти service.bat -> 5 (подобрать живые адреса CDN)'
 }
 else {
-    Write-Good 'Всё выглядит рабочим. Если ассеты всё равно не грузятся — пришли лог из %LOCALAPPDATA%\Roblox\logs'
+    Write-Bad 'Фикс уже установлен, но зависания остались:'
+    foreach ($sign in $signs) { Write-Note ('- {0}' -f $sign) }
+    Write-Host ''
+    Write-Host '  ВЕРДИКТ: ЭТОТ ФИКС НЕ ПОМОГ' -ForegroundColor Red
+    Write-Note 'Значит проблема не в QUIC и не в адресах CDN. Скорее всего блокируются сами серверы Roblox —'
+    Write-Note 'нужен инструмент обхода блокировок (VPN / zapret / GoodbyeDPI).'
+    Write-Action 'Откатить изменения: service.bat -> 9'
 }

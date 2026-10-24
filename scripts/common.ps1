@@ -5,7 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$script:UnlockerVersion = '1.0.1'
+$script:UnlockerVersion = '1.0.2'
 $script:RuleGroup       = 'RobloxUnlocker'
 $script:TaskName        = 'RobloxUnlocker-Refresh'
 $script:HostsPath       = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
