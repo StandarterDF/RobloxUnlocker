@@ -97,8 +97,12 @@ service.bat  ->  1
 
 Шаги:
 1. Проверь, что это Windows 10/11 и что доступен PowerShell.
-2. Скачай репозиторий в C:\Users\<мой пользователь>\RobloxUnlocker
-   (git clone, либо распакуй ZIP).
+2. Скачай репозиторий в C:\Users\<мой пользователь>\RobloxUnlocker:
+   git clone https://github.com/StandarterDF/RobloxUnlocker.git C:\Users\<мой пользователь>\RobloxUnlocker
+   Если git нет — скачай ZIP с https://github.com/StandarterDF/RobloxUnlocker
+   (кнопка Code -> Download ZIP), распакуй и переименуй папку
+   RobloxUnlocker-main в RobloxUnlocker.
+   Все дальнейшие команды выполняй из этой папки.
 3. Скажи мне запустить Roblox, зайти в проблемную игру на 2-3 минуты
    и полностью закрыть клиент. Дождись подтверждения.
 4. Запусти диагностику без прав администратора:
